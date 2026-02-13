@@ -1,0 +1,11 @@
+# Exports JSON volumineux
+exports_json/
+
+# Scripts de chargement volumineux
+postgresql/chargement/
+
+# Fichiers Power BI
+*.pbix
+
+# Gros PDF
+POWER BI/*.pdf

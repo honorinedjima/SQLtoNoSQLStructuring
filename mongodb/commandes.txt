@@ -1,0 +1,80 @@
+-- 4) Import dans MongoDB (base employees)
+
+-- DANS LE CMD
+-- D'abord :
+mongod
+
+--4.1 Commandes mongoimport
+mongoimport --db employees --collection employees     --file "C:\pg_exports\employees.json"     --jsonArray --drop
+mongoimport --db employees --collection departments   --file "C:\pg_exports\departments.json"   --jsonArray --drop
+mongoimport --db employees --collection dept_emp      --file "C:\pg_exports\dept_emp.json"      --jsonArray --drop
+mongoimport --db employees --collection dept_manager  --file "C:\pg_exports\dept_manager.json"  --jsonArray --drop
+mongoimport --db employees --collection titles        --file "C:\pg_exports\titles.json"        --jsonArray --drop
+mongoimport --db employees --collection salaries      --file "C:\pg_exports\salaries.json"      --jsonArray --drop
+
+
+--Puis je lance :
+mongosh
+
+use employees
+show collections
+
+db.employees.countDocuments()
+db.departments.countDocuments()
+db.dept_emp.countDocuments()
+db.dept_manager.countDocuments()
+db.titles.countDocuments()
+db.salaries.countDocuments()
+
+db.employees.findOne()
+
+
+-- 5.0 — Créer des index pour accélérer les $lookup
+db.titles.createIndex({ emp_no: 1 })
+db.salaries.createIndex({ emp_no: 1 })
+
+
+-- 5.1 — Jointure employees ↔ titles (1 $lookup)
+-- sur 1 employé pour voir
+db.employees.aggregate([ { $match: { emp_no: 10001 } }, { $lookup: {from: "titles", localField: "emp_no", foreignField: "emp_no", as: "titles" }}]).toArray()
+
+-- global
+db.employees.aggregate([{$lookup: {from: "titles", localField: "emp_no", foreignField: "emp_no", as: "titles"}}]).toArray()
+
+--5.2 — Pipeline à 2 étapes : jointure employees ↔ titles ↔ salaries
+const pipeline_jointure_3 = [{$lookup: {from: "titles", localField: "emp_no", foreignField: "emp_no", as: "titles"}},
+  {$lookup: {from: "salaries", localField: "emp_no", foreignField: "emp_no", as: "salaries"}}]
+
+
+-- 5.3 — Mesurer le temps d’exécution de la jointure (MongoDB)
+db.employees .explain("executionStats") .aggregate(pipeline_jointure_3, { allowDiskUse: true })
+
+
+--5.4 — Dénormalisation + $project (supprimer doublons emp_no et _id)
+let pipeline_denormalisation = [
+  ...pipeline_jointure_3, {$project: { _id: "$emp_no", birth_date: 1, first_name: 1, last_name: 1,
+      gender: 1, hire_date: 1,
+      titles: {$map: {input: "$titles", as: "t", in: {title: "$$t.title", from_date: "$$t.from_date",
+            to_date: "$$t.to_date"}}},
+      salaries: {$map: {input: "$salaries", as: "s", in: {salary: "$$s.salary",
+            from_date: "$$s.from_date", to_date: "$$s.to_date"}}}}}];
+
+-- J'test sur 1 employé pour vérifier
+db.employees.aggregate([{ $match: { emp_no: 10001 } }, ...pipeline_denormalisation], { allowDiskUse: true }).toArray();
+
+
+
+--5.5 — Sauvegarder le résultat dans une nouvelle collection ($merge ou $out)
+console.time("creation_employees_denormalises");
+
+db.employees.aggregate([
+    ...pipeline_denormalisation,
+    {$merge: {into: "employees_denormalises", on: "_id", whenMatched: "replace", whenNotMatched: "insert"}}],
+  { allowDiskUse: true }).toArray();
+
+console.timeEnd("creation_employees_denormalises");
+
+
+
+--5.6 Mesurer le délai d’accès à toutes les infos (après dénormalisation)
+db.employees_denormalises.explain("executionStats").find({ _id: 10001 }).limit(1);
